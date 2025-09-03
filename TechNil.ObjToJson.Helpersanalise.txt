@@ -205,60 +205,21 @@ end;
 
 procedure TJsonHelpers.LoadFromJsonArray(const JsonArr: TJSONArray);
 var
-  Ctx       : TRttiContext;
-  Typ       : TRttiType;
-  CountProp : TRttiProperty;
-  AddMethod : TRttiMethod;
-  ClearMeth : TRttiMethod;
-  ElType    : TRttiInstanceType;
-  E         : TJSONValue;
-  NewObj    : TObject;
-  Props     : TArray<TRttiProperty>;
-  Prop      : TRttiProperty;
-  I         : Integer;
-  JsonV     : TJSONValue;
-  tmpObj    : TJSONObject;
+  Ctx    : TRttiContext;
+  Typ    : TRttiType;
+  Props  : TArray<TRttiProperty>;
+  Prop   : TRttiProperty;
+  I      : Integer;
+  JsonV  : TJSONValue;
+  tmpObj : TJSONObject;
 begin
   Ctx := TRttiContext.Create;
   try
-    Typ := Ctx.GetType(Self.ClassType);
-
-    // Detecta se é uma lista genérica
-    CountProp := Typ.GetProperty('Count');
-    AddMethod := Typ.GetMethod('Add');
-    if Assigned(CountProp) and Assigned(AddMethod) then
-    begin
-      // Limpa lista
-      ClearMeth := Typ.GetMethod('Clear');
-      if Assigned(ClearMeth) then
-        ClearMeth.Invoke(Self, []);
-
-      // Tipo do elemento
-      if AddMethod.GetParameters[0].ParamType is TRttiInstanceType then
-        ElType := TRttiInstanceType(AddMethod.GetParameters[0].ParamType)
-      else
-        ElType := nil;
-
-      for E in JsonArr do
-      begin
-        if Assigned(ElType) and (E is TJSONObject) then
-        begin
-          NewObj := ElType.MetaclassType.Create;
-          try
-            NewObj.LoadFromJSON(E as TJSONObject);
-          except
-            NewObj.Free;
-            raise;
-          end;
-          AddMethod.Invoke(Self, [NewObj]);
-        end;
-      end;
-      Exit; // já tratou como lista
-    end;
-
-    // Caso não seja lista, mapeia por ordem alfabética das propriedades
+    Typ   := Ctx.GetType(Self.ClassType);
     Props := Typ.GetProperties;
-    TArray.Sort<TRttiProperty>(Props,
+
+    TArray.Sort<TRttiProperty>(
+      Props,
       TComparer<TRttiProperty>.Construct(
         function(const A, B: TRttiProperty): Integer
         begin
@@ -277,7 +238,8 @@ begin
 
       JsonV := JsonArr.Items[I];
       if JsonV is TJSONObject then
-        Prop.GetValue(Self).AsObject.LoadFromJSON(JsonV as TJSONObject)
+        Prop.GetValue(Self).AsObject
+          .LoadFromJSON(JsonV as TJSONObject)
       else
       begin
         tmpObj := TJSONObject.Create;
@@ -413,6 +375,9 @@ end;
 
 function TJsonHelpers.ToJsonArray: TJSONArray;
 var
+  JObject: TJSONObject;
+  Pair   : TJSONPair;
+  CloneV : TJSONValue;
   Objeto : TObject;
 begin
   if not Self.ClassName.ToLower.Contains('tobjectlist<') then
