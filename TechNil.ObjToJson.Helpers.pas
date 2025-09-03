@@ -1,0 +1,362 @@
+﻿unit TechNil.ObjToJson.Helpers;
+
+interface
+
+uses
+  System.SysUtils,
+  System.Classes,
+  System.JSON,
+  System.Rtti,
+  System.TypInfo,
+  System.DateUtils,
+  System.Generics.Collections,
+  System.Generics.Defaults;
+
+type
+  TJsonHelpers = class helper for TObject
+  public
+    procedure LoadFromJsonString(const JsonText: string);
+    procedure LoadFromJSON(const JsonObj: TJSONObject);
+    procedure LoadFromJsonArray(const JsonArr: TJSONArray);
+    function  ToJsonObject: TJSONObject;
+    function  ToJsonArray: TJSONArray;
+    function  ToJsonString: string;
+  end;
+
+implementation
+
+{ TJsonHelpers }
+
+procedure TJsonHelpers.LoadFromJsonString(const JsonText: string);
+var
+  JVal: TJSONValue;
+begin
+  JVal := TJSONObject.ParseJSONValue(JsonText);
+  try
+    if JVal is TJSONObject then
+      LoadFromJSON(TJSONObject(JVal))
+    else if JVal is TJSONArray then
+      LoadFromJsonArray(TJSONArray(JVal))
+    else
+      raise EJsonException.Create('JSON inválido para carregar em objeto');
+  finally
+    JVal.Free;
+  end;
+end;
+
+procedure TJsonHelpers.LoadFromJSON(const JsonObj: TJSONObject);
+var
+  Ctx         : TRttiContext;
+  Typ         : TRttiType;
+  Prop        : TRttiProperty;
+  Pair        : TJSONPair;
+  JsonVal     : TJSONValue;
+  LowerName   : string;
+  ValueObj    : TObject;
+  RListType   : TRttiType;
+  CountProp   : TRttiProperty;
+  AddMethod   : TRttiMethod;
+  ElType      : TRttiType;
+  E           : TJSONValue;
+  NewObj      : TObject;
+  ClearMethod : TRttiMethod;
+begin
+  Ctx := TRttiContext.Create;
+  try
+    Typ := Ctx.GetType(Self.ClassType);
+    for Pair in JsonObj do
+    begin
+      JsonVal   := Pair.JsonValue;
+      LowerName := LowerCase(Pair.JsonString.Value);
+
+      for Prop in Typ.GetProperties do
+        if Prop.IsWritable and
+          ((SameText(Prop.Name, Pair.JsonString.Value)) or
+           (LowerCase(Prop.Name) = LowerName)) then
+        begin
+          case Prop.PropertyType.TypeKind of
+            tkInteger:
+              Prop.SetValue(Self, JsonVal.Value.ToInteger);
+            tkInt64:
+              Prop.SetValue(Self, JsonVal.Value.ToInt64);
+            tkFloat:
+              begin
+                if Prop.PropertyType.Handle = TypeInfo(TDateTime) then
+                  Prop.SetValue(Self, ISO8601ToDate(JsonVal.Value))
+                else
+                  begin
+                    if TFormatSettings.Create.CurrencyString = 'R$' then
+                      Prop.SetValue(Self, StrToFloat(StringReplace(JsonVal.Value, '.', ',', [rfReplaceAll])))
+                    else
+                      Prop.SetValue(Self, StrToFloatDef(JsonVal.Value, 0));
+                  end;
+              end;
+            tkString, tkLString, tkWString, tkUString:
+              Prop.SetValue(Self, JsonVal.Value);
+            tkEnumeration:
+              if Prop.PropertyType.Handle = TypeInfo(Boolean) then
+                Prop.SetValue(Self, JsonVal.Value.ToBoolean)
+              else
+                Prop.SetValue(Self,
+                  TValue.FromOrdinal(
+                    Prop.PropertyType.Handle,
+                    GetEnumValue(
+                      Prop.PropertyType.Handle,
+                      JsonVal.Value
+                    )
+                  )
+                );
+            tkClass:
+              begin
+                // detecta lista genérica (TList<T> / TObjectList<T>)
+                ValueObj := Prop.GetValue(Self).AsObject;
+                if not Assigned(ValueObj) then
+                  Break;
+
+                RListType := Ctx.GetType(ValueObj.ClassType);
+                CountProp := RListType.GetProperty('Count');
+                AddMethod := RListType.GetMethod('Add');
+
+                if (JsonVal is TJSONArray) and
+                   Assigned(CountProp) and
+                   Assigned(AddMethod) then
+                begin
+                  // limpa a lista
+                  ClearMethod := RListType.GetMethod('Clear');
+                  if Assigned(ClearMethod) then
+                    ClearMethod.Invoke(ValueObj, []);
+
+                  // pega tipo do elemento para instanciar
+                  ElType := (AddMethod.GetParameters[0].ParamType as TRttiInstanceType);
+                  for E in TJSONArray(JsonVal) do
+                  begin
+                    if ElType is TRttiInstanceType then
+                    begin
+                      NewObj := TRttiInstanceType(ElType).MetaclassType.Create;
+                      try
+                        if E is TJSONObject then
+                          NewObj.LoadFromJSON(E as TJSONObject);
+                      except
+                        NewObj.Free;
+                        raise;
+                      end;
+                      // adiciona à lista
+                      AddMethod.Invoke(ValueObj, [NewObj]);
+                    end;
+                  end;
+                end
+                else if JsonVal is TJSONObject then
+                  // objeto aninhado comum
+                  ValueObj.LoadFromJSON(JsonVal as TJSONObject)
+                else if JsonVal is TJSONArray then
+                  // array atribuído a objeto
+                  ValueObj.LoadFromJsonArray(JsonVal as TJSONArray);
+              end;
+          else
+            Prop.SetValue(Self, JsonVal.Value);
+          end;
+          Break;
+        end;
+    end;
+  finally
+    Ctx.Free;
+  end;
+end;
+
+procedure TJsonHelpers.LoadFromJsonArray(const JsonArr: TJSONArray);
+var
+  Ctx    : TRttiContext;
+  Typ    : TRttiType;
+  Props  : TArray<TRttiProperty>;
+  Prop   : TRttiProperty;
+  I      : Integer;
+  JsonV  : TJSONValue;
+  tmpObj : TJSONObject;
+begin
+  Ctx := TRttiContext.Create;
+  try
+    Typ   := Ctx.GetType(Self.ClassType);
+    Props := Typ.GetProperties;
+
+    TArray.Sort<TRttiProperty>(
+      Props,
+      TComparer<TRttiProperty>.Construct(
+        function(const A, B: TRttiProperty): Integer
+        begin
+          Result := CompareText(A.Name, B.Name);
+        end
+      )
+    );
+
+    for I := 0 to High(Props) do
+    begin
+      if I >= JsonArr.Count then
+        Break;
+      Prop := Props[I];
+      if not Prop.IsWritable then
+        Continue;
+
+      JsonV := JsonArr.Items[I];
+      if JsonV is TJSONObject then
+        Prop.GetValue(Self).AsObject
+          .LoadFromJSON(JsonV as TJSONObject)
+      else
+      begin
+        tmpObj := TJSONObject.Create;
+        try
+          tmpObj.AddPair(Prop.Name, JsonV.Clone as TJSONValue);
+          LoadFromJSON(tmpObj);
+        finally
+          tmpObj.Free;
+        end;
+      end;
+    end;
+  finally
+    Ctx.Free;
+  end;
+end;
+
+function TJsonHelpers.ToJsonObject: TJSONObject;
+var
+  Ctx         : TRttiContext;
+  Typ         : TRttiType;
+  Prop        : TRttiProperty;
+  Name        : string;
+  JVal        : TJSONValue;
+  ValueObj    : TObject;
+  RListType   : TRttiType;
+  CountProp   : TRttiProperty;
+  GetItem     : TRttiMethod;
+  ListCount   : Integer;
+  I           : Integer;
+  ItemValue   : TValue;
+  ItemObj     : TObject;
+  JArr        : TJSONArray;
+begin
+  Result := TJSONObject.Create;
+  Ctx    := TRttiContext.Create;
+  try
+    Typ := Ctx.GetType(Self.ClassType);
+
+    for Prop in Typ.GetProperties do
+    begin
+      if not Prop.IsReadable then
+        Continue;
+
+      Name := Prop.Name;
+      case Prop.PropertyType.TypeKind of
+        tkInteger, tkInt64:
+          Result.AddPair(Name,
+            TJSONNumber.Create(Prop.GetValue(Self).AsInteger)
+          );
+
+        tkFloat:
+          if Prop.PropertyType.Handle = TypeInfo(TDateTime) then
+            Result.AddPair(Name,
+              TJSONString.Create(
+                DateToISO8601(
+                  Prop.GetValue(Self).AsType<TDateTime>
+                )
+              )
+            )
+          else
+            Result.AddPair(Name,
+              TJSONNumber.Create(
+                Prop.GetValue(Self).AsExtended
+              )
+            );
+
+        tkString, tkLString, tkWString, tkUString:
+          Result.AddPair(Name,
+            TJSONString.Create(Prop.GetValue(Self).AsString)
+          );
+
+        tkEnumeration:
+          if Prop.PropertyType.Handle = TypeInfo(Boolean) then
+            Result.AddPair(Name,
+              TJSONBool.Create(Prop.GetValue(Self).AsBoolean)
+            )
+          else
+            Result.AddPair(Name,
+              TJSONString.Create(Prop.GetValue(Self).ToString)
+            );
+
+        tkClass:
+          begin
+            ValueObj := Prop.GetValue(Self).AsObject;
+            if not Assigned(ValueObj) then
+            begin
+              Result.AddPair(Name, TJSONNull.Create);
+              Continue;
+            end;
+
+            // detecta lista genérica
+            RListType := Ctx.GetType(ValueObj.ClassType);
+            CountProp := RListType.GetProperty('Count');
+            GetItem   := RListType.GetMethod('GetItem');
+
+            if Assigned(CountProp) and Assigned(GetItem) then
+            begin
+              JArr      := TJSONArray.Create;
+              ListCount := CountProp.GetValue(ValueObj).AsInteger;
+              for I := 0 to ListCount - 1 do
+              begin
+                ItemValue := GetItem.Invoke(ValueObj, [I]);
+                ItemObj   := ItemValue.AsObject;
+                if Assigned(ItemObj) then
+                  JArr.AddElement(ItemObj.ToJsonObject)
+                else
+                  JArr.AddElement(TJSONNull.Create);
+              end;
+              Result.AddPair(Name, JArr);
+            end
+            else
+            begin
+              // objeto aninhado comum
+              JVal := ValueObj.ToJsonObject;
+              Result.AddPair(Name, JVal);
+            end;
+          end;
+      else
+        Result.AddPair(Name,
+          TJSONString.Create(Prop.GetValue(Self).ToString)
+        );
+      end;
+    end;
+  finally
+    Ctx.Free;
+  end;
+end;
+
+function TJsonHelpers.ToJsonArray: TJSONArray;
+var
+  JObject: TJSONObject;
+  Pair   : TJSONPair;
+  CloneV : TJSONValue;
+begin
+  Result := TJSONArray.Create;
+  JObject := ToJsonObject;
+  try
+    for Pair in JObject do
+    begin
+      CloneV := Pair.JsonValue.Clone as TJSONValue;
+      Result.AddElement(CloneV);
+    end;
+  finally
+    JObject.Free;
+  end;
+end;
+
+function TJsonHelpers.ToJsonString: string;
+var
+  JObj: TJSONObject;
+begin
+  JObj := ToJsonObject;
+  try
+    Result := JObj.ToString;
+  finally
+    JObj.Free;
+  end;
+end;
+
+end.
