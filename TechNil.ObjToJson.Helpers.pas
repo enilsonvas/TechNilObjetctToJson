@@ -14,33 +14,46 @@ uses
   System.NetEncoding;
 
 type
+  TpCase = (tpcNone, tpcFirstWordLower, tpcLower, tpcUpper);
+
+  TJsonHelpersOptions = class
+  private
+    function FormatNameProp(aName: string): string;
+    function GetUTC: Boolean;
+  public
+    isUTC: Boolean;
+    CaseFormat: TpCase;
+  published
+    constructor Create;
+  end;
+
   TJsonHelpers = class helper for TObject
   private
     function StreamFromBase64(aStream : TStream) : string;
     procedure Base64FromStream(aBase64 : string; aStream : TStream);
   public
-    procedure LoadFromJsonString(const JsonText: string);
-    procedure LoadFromJSON(const JsonObj: TJSONObject);
-    procedure LoadFromJsonArray(const JsonArr: TJSONArray);
-    function  ToJsonObject: TJSONObject;
-    function  ToJsonArray: TJSONArray;
-    function  ToJsonString: string;
+    procedure LoadFromJsonString(const JsonText: string; aOptions: TJsonHelpersOptions=nil);
+    procedure LoadFromJSON(const JsonObj: TJSONObject; aOptions: TJsonHelpersOptions=nil);
+    procedure LoadFromJsonArray(const JsonArr: TJSONArray; aOptions: TJsonHelpersOptions=nil);
+    function  ToJsonObject(aOptions: TJsonHelpersOptions=nil): TJSONObject;
+    function  ToJsonArray(aOptions: TJsonHelpersOptions=nil): TJSONArray;
+    function  ToJsonString(aOptions: TJsonHelpersOptions=nil): string;
   end;
 
 implementation
 
 { TJsonHelpers }
 
-procedure TJsonHelpers.LoadFromJsonString(const JsonText: string);
+procedure TJsonHelpers.LoadFromJsonString(const JsonText: string; aOptions: TJsonHelpersOptions=nil);
 var
   JVal: TJSONValue;
 begin
   JVal := TJSONObject.ParseJSONValue(JsonText);
   try
     if JVal is TJSONObject then
-      LoadFromJSON(TJSONObject(JVal))
+      LoadFromJSON(TJSONObject(JVal), aOptions)
     else if JVal is TJSONArray then
-      LoadFromJsonArray(TJSONArray(JVal))
+      LoadFromJsonArray(TJSONArray(JVal), aOptions)
     else
       raise EJsonException.Create('JSON inválido para carregar em objeto');
   finally
@@ -75,7 +88,7 @@ begin
   end;
 end;
 
-procedure TJsonHelpers.LoadFromJSON(const JsonObj: TJSONObject);
+procedure TJsonHelpers.LoadFromJSON(const JsonObj: TJSONObject; aOptions: TJsonHelpersOptions=nil);
 var
   Ctx         : TRttiContext;
   Typ         : TRttiType;
@@ -91,6 +104,7 @@ var
   E           : TJSONValue;
   NewObj      : TObject;
   ClearMethod : TRttiMethod;
+  PropName    : string;
 begin
   Ctx := TRttiContext.Create;
   try
@@ -101,9 +115,15 @@ begin
       LowerName := LowerCase(Pair.JsonString.Value);
 
       for Prop in Typ.GetProperties do
+      begin
+        PropName := Prop.Name;
+
+        if Assigned(aOptions) then
+          PropName := aOptions.FormatNameProp(PropName);
+
         if Prop.IsWritable and
-          ((SameText(Prop.Name, Pair.JsonString.Value)) or
-           (LowerCase(Prop.Name) = LowerName)) then
+          ((SameText(PropName, Pair.JsonString.Value)) or
+           (LowerCase(PropName) = LowerName)) then
         begin
           case Prop.PropertyType.TypeKind of
             tkInteger:
@@ -113,7 +133,12 @@ begin
             tkFloat:
               begin
                 if Prop.PropertyType.Handle = TypeInfo(TDateTime) then
-                  Prop.SetValue(Self, ISO8601ToDate(JsonVal.Value))
+                  begin
+                    if Assigned(aOptions) then
+                      Prop.SetValue(Self, ISO8601ToDate(JsonVal.Value, aOptions.GetUTC))
+                    else
+                      Prop.SetValue(Self, ISO8601ToDate(JsonVal.Value));
+                  end
                 else
                   begin
                     if TFormatSettings.Create.CurrencyString = 'R$' then
@@ -174,9 +199,9 @@ begin
                           NewObj := TRttiInstanceType(ElType).MetaclassType.Create;
                           try
                             if E is TJSONObject then
-                              NewObj.LoadFromJSON(E as TJSONObject);
+                              NewObj.LoadFromJSON(E as TJSONObject, aOptions);
                           except
-                            NewObj.Free;
+                            FreeAndNil(NewObj);
                             raise;
                           end;
                           // adiciona à lista
@@ -186,10 +211,10 @@ begin
                     end
                     else if JsonVal is TJSONObject then
                       // objeto aninhado comum
-                      ValueObj.LoadFromJSON(JsonVal as TJSONObject)
+                      ValueObj.LoadFromJSON(JsonVal as TJSONObject, aOptions)
                     else if JsonVal is TJSONArray then
                       // array atribuído a objeto
-                      ValueObj.LoadFromJsonArray(JsonVal as TJSONArray);
+                      ValueObj.LoadFromJsonArray(JsonVal as TJSONArray, aOptions);
                   end;
               end;
           else
@@ -197,13 +222,14 @@ begin
           end;
           Break;
         end;
+      end;
     end;
   finally
     Ctx.Free;
   end;
 end;
 
-procedure TJsonHelpers.LoadFromJsonArray(const JsonArr: TJSONArray);
+procedure TJsonHelpers.LoadFromJsonArray(const JsonArr: TJSONArray; aOptions: TJsonHelpersOptions=nil);
 var
   Ctx       : TRttiContext;
   Typ       : TRttiType;
@@ -245,7 +271,7 @@ begin
         begin
           NewObj := ElType.MetaclassType.Create;
           try
-            NewObj.LoadFromJSON(E as TJSONObject);
+            NewObj.LoadFromJSON(E as TJSONObject, aOptions);
           except
             NewObj.Free;
             raise;
@@ -277,13 +303,13 @@ begin
 
       JsonV := JsonArr.Items[I];
       if JsonV is TJSONObject then
-        Prop.GetValue(Self).AsObject.LoadFromJSON(JsonV as TJSONObject)
+        Prop.GetValue(Self).AsObject.LoadFromJSON(JsonV as TJSONObject, aOptions)
       else
       begin
         tmpObj := TJSONObject.Create;
         try
           tmpObj.AddPair(Prop.Name, JsonV.Clone as TJSONValue);
-          LoadFromJSON(tmpObj);
+          LoadFromJSON(tmpObj, aOptions);
         finally
           tmpObj.Free;
         end;
@@ -294,7 +320,7 @@ begin
   end;
 end;
 
-function TJsonHelpers.ToJsonObject: TJSONObject;
+function TJsonHelpers.ToJsonObject(aOptions: TJsonHelpersOptions=nil): TJSONObject;
 var
   Ctx         : TRttiContext;
   Typ         : TRttiType;
@@ -310,9 +336,13 @@ var
   ItemValue   : TValue;
   ItemObj     : TObject;
   JArr        : TJSONArray;
+  UTCDef      : Boolean;
 begin
   Result := TJSONObject.Create;
   Ctx    := TRttiContext.Create;
+
+  UTCDef := true;
+
   try
     Typ := Ctx.GetType(Self.ClassType);
 
@@ -322,6 +352,14 @@ begin
         Continue;
 
       Name := Prop.Name;
+
+      if Assigned(aOptions) then
+        begin
+          Name := aOptions.FormatNameProp(Name);
+          UTCDef := aOptions.GetUTC;
+        end;
+
+
       case Prop.PropertyType.TypeKind of
         tkInteger, tkInt64:
           Result.AddPair(Name,
@@ -330,13 +368,15 @@ begin
 
         tkFloat:
           if Prop.PropertyType.Handle = TypeInfo(TDateTime) then
-            Result.AddPair(Name,
-              TJSONString.Create(
-                DateToISO8601(
-                  Prop.GetValue(Self).AsType<TDateTime>
+            begin
+              Result.AddPair(Name,
+                TJSONString.Create(
+                  DateToISO8601(
+                    Prop.GetValue(Self).AsType<TDateTime>, UTCDef
+                  )
                 )
               )
-            )
+            end
           else
             Result.AddPair(Name,
               TJSONNumber.Create(
@@ -386,7 +426,7 @@ begin
                     ItemValue := GetItem.Invoke(ValueObj, [I]);
                     ItemObj   := ItemValue.AsObject;
                     if Assigned(ItemObj) then
-                      JArr.AddElement(ItemObj.ToJsonObject)
+                      JArr.AddElement(ItemObj.ToJsonObject(aOptions))
                     else
                       JArr.AddElement(TJSONNull.Create);
                   end;
@@ -395,7 +435,7 @@ begin
                 else
                 begin
                   // objeto aninhado comum
-                  JVal := ValueObj.ToJsonObject;
+                  JVal := ValueObj.ToJsonObject(aOptions);
                   Result.AddPair(Name, JVal);
                 end;
               end;
@@ -411,7 +451,7 @@ begin
   end;
 end;
 
-function TJsonHelpers.ToJsonArray: TJSONArray;
+function TJsonHelpers.ToJsonArray(aOptions: TJsonHelpersOptions=nil): TJSONArray;
 var
   Objeto : TObject;
 begin
@@ -422,20 +462,43 @@ begin
 
   for Objeto in TObjectList<TObject>(Self) do
     begin
-      Result.AddElement(Objeto.ToJsonObject);
+      Result.AddElement(Objeto.ToJsonObject(aOptions));
     end;
 end;
 
-function TJsonHelpers.ToJsonString: string;
+function TJsonHelpers.ToJsonString(aOptions: TJsonHelpersOptions=nil): string;
 var
   JObj: TJSONObject;
 begin
-  JObj := ToJsonObject;
+  JObj := ToJsonObject(aOptions);
   try
     Result := JObj.ToString;
   finally
     JObj.Free;
   end;
+end;
+
+{ TJsonHelpersOptions }
+
+constructor TJsonHelpersOptions.Create;
+begin
+  isUTC      := True;
+  CaseFormat := tpcNone;
+end;
+
+function TJsonHelpersOptions.FormatNameProp(aName: string): string;
+begin
+  case CaseFormat of
+    tpcNone          : Result := aName;
+    tpcFirstWordLower: Result := LowerCase(aName.Chars[0]) + aName.Remove(0, 1);
+    tpcLower         : Result := aName.ToLower;
+    tpcUpper         : Result := aName.ToUpper;
+  end;
+end;
+
+function TJsonHelpersOptions.GetUTC: Boolean;
+begin
+  Result := isUTC;
 end;
 
 end.
