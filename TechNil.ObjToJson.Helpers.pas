@@ -16,6 +16,11 @@ uses
   System.StrUtils;
 
 type
+  EIncompatibilidadeTipo = class(Exception)
+  public
+    constructor Create(const Campo, TipoEsperado, TipoRecebido: string);
+  end;
+
   TpCase = (tpcNone, tpcFirstWordLower, tpcLower, tpcUpper);
 
   TJsonHelpersOptions = class
@@ -43,6 +48,15 @@ type
     function  ToJsonObject(aOptions: TJsonHelpersOptions=nil): TJSONObject;
     function  ToJsonArray(aOptions: TJsonHelpersOptions=nil): TJSONArray;
     function  ToJsonString(aOptions: TJsonHelpersOptions=nil): string;
+  end;
+
+  TDataSetHelper = class helper for TDataSet
+  public
+    /// <summary>
+    ///  Preenche os campos do TDataSet com valores das propriedades públicas de um objeto.
+    ///  Campos cujo nome estiver em CamposIgnorados serão pulados.
+    /// </summary>
+    procedure LoadFromObject(aObj: TObject; const CamposIgnorados: TArray<string> = []);
   end;
 
 implementation
@@ -578,6 +592,107 @@ end;
 function TJsonHelpersOptions.GetUTC: Boolean;
 begin
   Result := isUTC;
+end;
+
+{ TDataSetHelper }
+
+procedure TDataSetHelper.LoadFromObject(aObj: TObject; const CamposIgnorados: TArray<string> = []);
+var
+  ctx: TRttiContext;
+  rType: TRttiType;
+  prop: TRttiProperty;
+  value: TValue;
+  i: Integer;
+  IgnoradosUpper: TArray<string>;
+  field: TField;
+  tempInt: Integer;
+  tempFloat: Extended;
+  tempStr: string;
+  tempBool: Boolean;
+  tempDate: TDateTime;
+begin
+  rType := ctx.GetType(aObj.ClassType);
+
+  SetLength(IgnoradosUpper, Length(CamposIgnorados));
+  for i := 0 to High(CamposIgnorados) do
+    IgnoradosUpper[i] := UpperCase(CamposIgnorados[i]);
+
+  for i := 0 to FieldCount - 1 do
+  begin
+    field := Fields[i];
+
+    if MatchText(UpperCase(field.FieldName), IgnoradosUpper) then
+      Continue;
+
+    prop := rType.GetProperty(field.FieldName);
+    if not Assigned(prop) or not prop.IsReadable then
+      Continue;
+
+    value := prop.GetValue(aObj);
+
+    // Ignora valores nulos, vazios ou padrão
+    if value.IsEmpty or
+       ((value.Kind = tkString) and value.AsString.Trim.IsEmpty) or
+       ((value.Kind = tkClass) and (value.AsObject = nil)) or
+       ((value.Kind = tkInteger) and (value.AsInteger = 0)) or
+       ((value.Kind = tkFloat) and (value.AsExtended = 0.0)) then
+      Continue;
+
+    // Verifica compatibilidade e atribui
+    case field.DataType of
+      ftInteger, ftSmallint, ftWord, ftAutoInc:
+        if value.TryAsType<Integer>(tempInt) then
+          field.AsInteger := tempInt
+        else
+          raise EIncompatibilidadeTipo.Create(field.FieldName, 'Integer', value.TypeInfo.Name);
+
+      ftFloat, ftCurrency, ftBCD:
+        if value.TryAsType<Extended>(tempFloat) then
+          field.AsFloat := tempFloat
+        else
+          raise EIncompatibilidadeTipo.Create(field.FieldName, 'Float', value.TypeInfo.Name);
+
+      ftString, ftWideString, ftMemo:
+        if value.TryAsType<string>(tempStr) then
+          field.AsString := tempStr
+        else
+          raise EIncompatibilidadeTipo.Create(field.FieldName, 'String', value.TypeInfo.Name);
+
+      ftDate, ftTime, ftDateTime:
+        if value.TryAsType<TDateTime>(tempDate) then
+          field.AsDateTime := tempDate
+        else
+          raise EIncompatibilidadeTipo.Create(field.FieldName, 'DateTime', value.TypeInfo.Name);
+
+      ftBoolean:
+        if value.TryAsType<Boolean>(tempBool) then
+          field.AsBoolean := tempBool
+        else
+          raise EIncompatibilidadeTipo.Create(field.FieldName, 'Boolean', value.TypeInfo.Name);
+
+      ftBlob:
+        if value.IsObject and (value.AsObject is TStream) then
+        begin
+          if TStream(value.AsObject).Size > 0 then
+            (field as TBlobField).LoadFromStream(TStream(value.AsObject));
+        end
+        else if value.TryAsType<string>(tempStr) then
+          field.Value := tempStr
+        else
+          raise EIncompatibilidadeTipo.Create(field.FieldName, 'TStream ou String', value.TypeInfo.Name);
+    else
+      raise EIncompatibilidadeTipo.Create(field.FieldName, 'Tipo suportado', FieldTypeNames[field.DataType]);
+    end;
+  end;
+end;
+
+{ EIncompatibilidadeTipo }
+
+constructor EIncompatibilidadeTipo.Create(const Campo, TipoEsperado,
+  TipoRecebido: string);
+begin
+  inherited CreateFmt('Incompatibilidade de tipo no campo "%s": esperado %s, recebido %s',
+    [Campo, TipoEsperado, TipoRecebido]);
 end;
 
 end.
