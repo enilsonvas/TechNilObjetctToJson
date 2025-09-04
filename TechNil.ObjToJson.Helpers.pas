@@ -519,18 +519,6 @@ begin
       // Se for nulo, atribui um default
       if field.IsNull then
       begin
-        case field.DataType of
-          ftInteger, ftSmallint, ftWord, ftAutoInc:
-            prop.SetValue(Self, TValue.From<Integer>(0));
-          ftFloat, ftCurrency, ftBCD:
-            prop.SetValue(Self, TValue.From<Double>(0));
-          ftString, ftWideString, ftMemo:
-            prop.SetValue(Self, TValue.From<string>(''));
-          ftDate, ftTime, ftDateTime:
-            prop.SetValue(Self, TValue.From<TDateTime>(0));
-          ftBlob:
-            prop.SetValue(Self, TValue.From<TStream>(nil));
-        end;
         Continue;
       end;
 
