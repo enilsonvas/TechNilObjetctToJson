@@ -34,7 +34,7 @@ type
     function StreamFromBase64(aStream : TStream) : string;
     procedure Base64FromStream(aBase64 : string; aStream : TStream);
   public
-    procedure LoadFromDataSet(Lds: TDataSet; const CamposIgnorados: TArray<string>);
+    procedure LoadFromDataSet(Lds: TDataSet; const CamposIgnorados: TArray<string>=[]);
 
     procedure LoadFromJsonString(const JsonText: string; aOptions: TJsonHelpersOptions=nil);
     procedure LoadFromJSON(const JsonObj: TJSONObject; aOptions: TJsonHelpersOptions=nil);
