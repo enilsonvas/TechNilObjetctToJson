@@ -11,7 +11,9 @@ uses
   System.DateUtils,
   System.Generics.Collections,
   System.Generics.Defaults,
-  System.NetEncoding;
+  System.NetEncoding,
+  Data.DB,
+  System.StrUtils;
 
 type
   TpCase = (tpcNone, tpcFirstWordLower, tpcLower, tpcUpper);
@@ -32,9 +34,12 @@ type
     function StreamFromBase64(aStream : TStream) : string;
     procedure Base64FromStream(aBase64 : string; aStream : TStream);
   public
+    procedure LoadFromDataSet(Lds: TDataSet; const CamposIgnorados: TArray<string>);
+
     procedure LoadFromJsonString(const JsonText: string; aOptions: TJsonHelpersOptions=nil);
     procedure LoadFromJSON(const JsonObj: TJSONObject; aOptions: TJsonHelpersOptions=nil);
     procedure LoadFromJsonArray(const JsonArr: TJSONArray; aOptions: TJsonHelpersOptions=nil);
+
     function  ToJsonObject(aOptions: TJsonHelpersOptions=nil): TJSONObject;
     function  ToJsonArray(aOptions: TJsonHelpersOptions=nil): TJSONArray;
     function  ToJsonString(aOptions: TJsonHelpersOptions=nil): string;
@@ -475,6 +480,92 @@ begin
     Result := JObj.ToString;
   finally
     JObj.Free;
+  end;
+end;
+
+procedure TJsonHelpers.LoadFromDataSet(Lds: TDataSet;
+  const CamposIgnorados: TArray<string>);
+var
+  ctx: TRttiContext;
+  rType: TRttiType;
+  prop: TRttiProperty;
+  i: Integer;
+  IgnoradosUpper: TArray<string>;
+  field: TField;
+  defaultStream: TMemoryStream;
+begin
+  ctx := TRttiContext.Create;
+  try
+    rType := ctx.GetType(Self.ClassType);
+
+    // Monta lista de campos ignorados em uppercase
+    SetLength(IgnoradosUpper, Length(CamposIgnorados));
+    for i := 0 to High(CamposIgnorados) do
+      IgnoradosUpper[i] := UpperCase(CamposIgnorados[i]);
+
+    for i := 0 to Lds.FieldCount - 1 do
+    begin
+      field := Lds.Fields[i];
+
+      // Se for pra ignorar, pula
+      if (Length(IgnoradosUpper) > 0) and
+         MatchText(UpperCase(field.FieldName), IgnoradosUpper) then
+        Continue;
+
+      prop := rType.GetProperty(field.FieldName);
+      if not Assigned(prop) or not prop.IsWritable then
+        Continue;
+
+      // Se for nulo, atribui um default
+      if field.IsNull then
+      begin
+        case field.DataType of
+          ftInteger, ftSmallint, ftWord, ftAutoInc:
+            prop.SetValue(Self, TValue.From<Integer>(0));
+          ftFloat, ftCurrency, ftBCD:
+            prop.SetValue(Self, TValue.From<Double>(0));
+          ftString, ftWideString, ftMemo:
+            prop.SetValue(Self, TValue.From<string>(''));
+          ftDate, ftTime, ftDateTime:
+            prop.SetValue(Self, TValue.From<TDateTime>(0));
+          ftBlob:
+            prop.SetValue(Self, TValue.From<TStream>(nil));
+        end;
+        Continue;
+      end;
+
+      // Mapeamento normal conforme tipo
+      case field.DataType of
+        ftInteger, ftSmallint, ftWord, ftAutoInc:
+          prop.SetValue(Self, TValue.From<Integer>(field.AsInteger));
+        ftFloat, ftCurrency, ftBCD:
+          prop.SetValue(Self, TValue.From<Double>(field.AsFloat));
+        ftString, ftWideString, ftMemo:
+          prop.SetValue(Self, TValue.From<string>(field.AsString));
+        ftDate, ftTime, ftDateTime:
+          prop.SetValue(Self, TValue.From<TDateTime>(field.AsDateTime));
+        ftBlob:
+          begin
+            if prop.PropertyType.IsInstance and
+               prop.PropertyType.AsInstance.MetaclassType.InheritsFrom(TStream) then
+            begin
+              defaultStream := TMemoryStream.Create;
+              try
+                (field as TBlobField).SaveToStream(defaultStream);
+                defaultStream.Position := 0;
+                prop.SetValue(Self, TValue.From<TStream>(defaultStream));
+              except
+                defaultStream.Free;
+                raise;
+              end;
+            end
+            else
+              prop.SetValue(Self, TValue.From<string>(field.AsString));
+          end;
+      end;
+    end;
+  finally
+    ctx.Free;
   end;
 end;
 
