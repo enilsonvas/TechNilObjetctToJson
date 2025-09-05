@@ -544,7 +544,7 @@ begin
           prop.SetValue(Self, TValue.From<Double>(field.AsFloat));
         ftString, ftWideString, ftMemo:
           prop.SetValue(Self, TValue.From<string>(field.AsString));
-        ftDate, ftTime, ftDateTime:
+        ftDate, ftTime, ftDateTime, ftTimeStamp:
           prop.SetValue(Self, TValue.From<TDateTime>(field.AsDateTime));
         ftBlob:
           begin
@@ -658,7 +658,7 @@ begin
         else
           raise EIncompatibilidadeTipo.Create(field.FieldName, 'String', value.TypeInfo.Name);
 
-      ftDate, ftTime, ftDateTime:
+      ftDate, ftTime, ftDateTime, ftTimeStamp:
         if value.TryAsType<TDateTime>(tempDate) then
           field.AsDateTime := tempDate
         else
