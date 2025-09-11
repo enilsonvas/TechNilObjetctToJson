@@ -500,13 +500,19 @@ end;
 procedure TJsonHelpers.LoadFromDataSet(Lds: TDataSet;
   const CamposIgnorados: TArray<string>);
 var
-  ctx: TRttiContext;
-  rType: TRttiType;
-  prop: TRttiProperty;
-  i: Integer;
+  ctx           : TRttiContext;
+  rType         : TRttiType;
+  prop          : TRttiProperty;
+  i             : Integer;
   IgnoradosUpper: TArray<string>;
-  field: TField;
-  defaultStream: TMemoryStream;
+  field         : TField;
+  defaultStream : TMemoryStream;
+  // variáveis para detecção de lista
+  CountProp     : TRttiProperty;
+  AddMethod     : TRttiMethod;
+  ClearMethod   : TRttiMethod;
+  ElType        : TRttiInstanceType;
+  NewObj        : TObject;
 begin
   ctx := TRttiContext.Create;
   try
@@ -517,11 +523,55 @@ begin
     for i := 0 to High(CamposIgnorados) do
       IgnoradosUpper[i] := UpperCase(CamposIgnorados[i]);
 
+    // —— 1) Detecta se Self é uma lista genérica (TList<T> / TObjectList<T>) ——
+    CountProp := rType.GetProperty('Count');
+    AddMethod := rType.GetMethod('Add');
+    if Assigned(CountProp) and Assigned(AddMethod) then
+    begin
+      // limpa lista
+      ClearMethod := rType.GetMethod('Clear');
+      if Assigned(ClearMethod) then
+        ClearMethod.Invoke(Self, []);
+
+      // obtém tipo do elemento T
+      if AddMethod.GetParameters[0].ParamType is TRttiInstanceType then
+        ElType := TRttiInstanceType(AddMethod.GetParameters[0].ParamType)
+      else
+        ElType := nil;
+
+      // percorre dataset
+      Lds.DisableControls;
+      try
+        Lds.First;
+        while not Lds.Eof do
+        begin
+          if Assigned(ElType) then
+          begin
+            NewObj := ElType.MetaclassType.Create;
+            try
+              // recursão: o próprio LoadFromDataSet preenche o objeto T
+              NewObj.LoadFromDataSet(Lds, CamposIgnorados);
+              AddMethod.Invoke(Self, [NewObj]);
+            except
+              NewObj.Free;
+              raise;
+            end;
+          end;
+          Lds.Next;
+        end;
+      finally
+        Lds.EnableControls;
+      end;
+
+      Exit; // já processou como lista, não faz mapeamento individual
+    end;
+
+    // —— 2) Caso não seja lista, faz o mapeamento normal de campos ——
     for i := 0 to Lds.FieldCount - 1 do
     begin
       field := Lds.Fields[i];
 
-      // Se for pra ignorar, pula
+      // pula campos ignorados
       if (Length(IgnoradosUpper) > 0) and
          MatchText(UpperCase(field.FieldName), IgnoradosUpper) then
         Continue;
@@ -530,13 +580,9 @@ begin
       if not Assigned(prop) or not prop.IsWritable then
         Continue;
 
-      // Se for nulo, atribui um default
       if field.IsNull then
-      begin
         Continue;
-      end;
 
-      // Mapeamento normal conforme tipo
       case field.DataType of
         ftInteger, ftSmallint, ftWord, ftAutoInc:
           prop.SetValue(Self, TValue.From<Integer>(field.AsInteger));
@@ -566,10 +612,12 @@ begin
           end;
       end;
     end;
+
   finally
     ctx.Free;
   end;
 end;
+
 
 { TJsonHelpersOptions }
 
