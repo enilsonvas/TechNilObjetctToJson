@@ -583,16 +583,19 @@ begin
       if field.IsNull then
         Continue;
 
-      case field.DataType of
-        ftInteger, ftSmallint, ftWord, ftAutoInc:
+      case Prop.PropertyType.TypeKind of
+        tkInteger, tkInt64:
           prop.SetValue(Self, TValue.From<Integer>(field.AsInteger));
-        ftFloat, ftCurrency, ftBCD:
-          prop.SetValue(Self, TValue.From<Double>(field.AsFloat));
-        ftString, ftWideString, ftMemo:
+        tkFloat:
+          begin
+            if Prop.PropertyType.Handle = TypeInfo(TDateTime) then
+              prop.SetValue(Self, TValue.From<TDateTime>(field.AsDateTime))
+            else
+              prop.SetValue(Self, TValue.From<Double>(field.AsFloat));
+          end;
+        tkString, tkWideString:
           prop.SetValue(Self, TValue.From<string>(field.AsString));
-        ftDate, ftTime, ftDateTime, ftTimeStamp:
-          prop.SetValue(Self, TValue.From<TDateTime>(field.AsDateTime));
-        ftBlob:
+        tkClass:
           begin
             if prop.PropertyType.IsInstance and
                prop.PropertyType.AsInstance.MetaclassType.InheritsFrom(TStream) then
