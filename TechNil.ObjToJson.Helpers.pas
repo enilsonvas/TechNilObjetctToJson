@@ -593,7 +593,7 @@ begin
             else
               prop.SetValue(Self, TValue.From<Double>(field.AsFloat));
           end;
-        tkString, tkWideString:
+        tkString, tkLString, tkWString, tkUString:
           prop.SetValue(Self, TValue.From<string>(field.AsString));
         tkClass:
           begin
