@@ -125,6 +125,7 @@ var
   ClearMethod : TRttiMethod;
   PropName    : string;
 begin
+
   Ctx := TRttiContext.Create;
   try
     Typ := Ctx.GetType(Self.ClassType);
@@ -140,9 +141,10 @@ begin
         if Assigned(aOptions) then
           PropName := aOptions.FormatNameProp(PropName);
 
-        if Prop.IsWritable and
+        if (Prop.IsWritable) and
           ((SameText(PropName, Pair.JsonString.Value)) or
-           (LowerCase(PropName) = LowerName)) then
+           (LowerCase(PropName) = LowerName)) and
+           not (JsonVal.Value.IsEmpty) then
         begin
           case Prop.PropertyType.TypeKind of
             tkInteger:
@@ -151,7 +153,7 @@ begin
               Prop.SetValue(Self, JsonVal.Value.ToInt64);
             tkFloat:
               begin
-                if Prop.PropertyType.Handle = TypeInfo(TDateTime) then
+                if (Prop.PropertyType.Handle = TypeInfo(TDateTime)) then
                   begin
                     if Assigned(aOptions) then
                       Prop.SetValue(Self, ISO8601ToDate(JsonVal.Value, aOptions.GetUTC))
