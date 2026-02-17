@@ -13,7 +13,8 @@ uses
   System.Generics.Defaults,
   System.NetEncoding,
   Data.DB,
-  System.StrUtils;
+  System.StrUtils,
+  System.Variants;
 
 type
   EIncompatibilidadeTipo = class(Exception)
@@ -380,8 +381,9 @@ begin
           UTCDef := aOptions.GetUTC;
         end;
 
-
-      case Prop.PropertyType.TypeKind of
+      if (Prop.GetValue(Self).IsEmpty) then
+        Result.AddPair(Name, TJSONNull.Create)
+      else case Prop.PropertyType.TypeKind of
         tkInteger, tkInt64:
           Result.AddPair(Name,
             TJSONNumber.Create(Prop.GetValue(Self).AsInteger)
