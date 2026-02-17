@@ -392,13 +392,16 @@ begin
         tkFloat:
           if Prop.PropertyType.Handle = TypeInfo(TDateTime) then
             begin
-              Result.AddPair(Name,
-                TJSONString.Create(
-                  DateToISO8601(
-                    Prop.GetValue(Self).AsType<TDateTime>, UTCDef
+              if Prop.GetValue(Self).AsType<TDateTime> = 0 then
+                Result.AddPair(Name,TJSONNull.Create)
+              else
+                Result.AddPair(Name,
+                  TJSONString.Create(
+                    DateToISO8601(
+                      Prop.GetValue(Self).AsType<TDateTime>, UTCDef
+                    )
                   )
                 )
-              )
             end
           else
             Result.AddPair(Name,
