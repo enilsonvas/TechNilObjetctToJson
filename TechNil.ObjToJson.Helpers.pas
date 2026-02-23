@@ -145,7 +145,7 @@ begin
         if (Prop.IsWritable) and
           ((SameText(PropName, Pair.JsonString.Value)) or
            (LowerCase(PropName) = LowerName)) and
-           not (JsonVal.Value.IsEmpty) then
+           not (JsonVal.Value.IsEmpty) and not (JsonVal is TJSONNull) then
         begin
           case Prop.PropertyType.TypeKind of
             tkInteger:
